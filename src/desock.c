@@ -159,6 +159,15 @@ int (*original_connect)(int sockfd, const struct sockaddr *addr, socklen_t addrl
 int (*original_close)(int fd);
 int (*original_shutdown)(int sockfd, int how);
 int (*original_getsockname)(int sockfd, struct sockaddr *addr, socklen_t *addrlen);
+
+ssize_t (*original_send)(int sockfd, const void *buf, size_t len, int flags);
+ssize_t (*original_sendto)(int sockfd, const void *buf, size_t len, int flags, const struct sockaddr *dest_addr, socklen_t addrlen);
+ssize_t (*original_sendmsg)(int sockfd, const struct msghdr *msg, int flags);
+
+ssize_t (*original_recv)(int sockfd, void *buf, size_t len, int flags);
+ssize_t (*original_recvfrom)(int sockfd, void *buf, size_t len, int flags, struct sockaddr *src_addr, socklen_t *addrlen);
+ssize_t (*original_recvmsg)(int sockfd, struct msghdr *msg, int flags);
+
 __attribute__((constructor)) void preeny_desock_orig()
 {
 	original_socket = dlsym(RTLD_NEXT, "socket");
@@ -169,65 +178,23 @@ __attribute__((constructor)) void preeny_desock_orig()
 	original_close = dlsym(RTLD_NEXT, "close");
 	original_shutdown = dlsym(RTLD_NEXT, "shutdown");
 	original_getsockname = dlsym(RTLD_NEXT, "getsockname");
+
+	original_send = dlsym(RTLD_NEXT, "send");
+	original_sendto = dlsym(RTLD_NEXT, "sendto");
+	original_sendmsg = dlsym(RTLD_NEXT, "sendmsg");
+
+	original_recv = dlsym(RTLD_NEXT, "recv");
+	original_recvfrom = dlsym(RTLD_NEXT, "recvfrom");
+	original_recvmsg = dlsym(RTLD_NEXT, "recvmsg");
 }
 
 int socket(int domain, int type, int protocol)
 {
-	int fds[2];
-	int front_socket;
-	int back_socket;
-
-	if (domain != AF_INET && domain != AF_INET6)
-	{
-		preeny_info("Ignoring non-internet socket.");
-		return original_socket(domain, type, protocol);
-	}
-	
-	int r = socketpair(AF_UNIX, type, 0, fds);
-	preeny_debug("Intercepted socket()!\n");
-
-	if (r != 0)
-	{
-		perror("preeny socket emulation failed:");
-		return -1;
-	}
-
-	preeny_debug("... created socket pair (%d, %d)\n", fds[0], fds[1]);
-
-	front_socket = fds[0];
-	back_socket = dup2(fds[1], PREENY_SOCKET(front_socket));
-	close(fds[1]);
-
-	preeny_debug("... dup into socketpair (%d, %d)\n", fds[0], back_socket);
-
-	preeny_socket_threads_to_front[fds[0]] = malloc(sizeof(pthread_t));
-	preeny_socket_threads_to_back[fds[0]] = malloc(sizeof(pthread_t));
-
-	r = pthread_create(preeny_socket_threads_to_front[fds[0]], NULL, (void*(*)(void*))preeny_socket_sync_to_front, (void *)front_socket);
-	if (r)
-	{
-		perror("failed creating front-sync thread");
-		return -1;
-	}
-
-	r = pthread_create(preeny_socket_threads_to_back[fds[0]], NULL, (void*(*)(void*))preeny_socket_sync_to_back, (void *)front_socket);
-	if (r)
-	{
-		perror("failed creating back-sync thread");
-		return -1;
-	}
-
-	return fds[0];
+	return 0x666;
 }
 
 int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen)
 {
-	if (preeny_desock_accepted_sock >= 0)
-	{
-                errno = ECONNRESET;
-		return -1;
-	}
-
 	//initialize a sockaddr_in for the peer
 	 struct sockaddr_in peer_addr;
 	 memset(&peer_addr, '0', sizeof(struct sockaddr_in));
@@ -235,37 +202,24 @@ int accept(int sockfd, struct sockaddr *addr, socklen_t *addrlen)
 	//Set the contents in the peer's sock_addr. 
 	//Make sure the contents will simulate a real client that connects with the intercepted server, as the server may depend on the contents to make further decisions. 
 	//The followings set-up should be fine with Nginx.
-	 peer_addr.sin_family = AF_INET;
-	 peer_addr.sin_addr.s_addr = htonl(INADDR_ANY);
-         peer_addr.sin_port = htons(PREENY_SIN_PORT);
+	peer_addr.sin_family = AF_INET;
+	peer_addr.sin_addr.s_addr = htonl(INADDR_ANY);
+	peer_addr.sin_port = htons(PREENY_SIN_PORT);
 
 	//copy the initialized peer_addr back to the original sockaddr. Note the space for the original sockaddr, namely addr, has already been allocated
 	if (addr) memcpy(addr, &peer_addr, sizeof(struct sockaddr_in));
 
-	if (preeny_socket_threads_to_front[sockfd])
-	{
-		preeny_desock_accepted_sock = dup(sockfd);
-		return preeny_desock_accepted_sock;
-	}
-	else return original_accept(sockfd, addr, addrlen);
+	return 0x888;
 }
 
 int accept4(int sockfd, struct sockaddr *addr, socklen_t *addrlen, int flags)
 {
-       return accept(sockfd, addr, addrlen);
+	return accept(sockfd, addr, addrlen);
 }
 
 int bind(int sockfd, const struct sockaddr *addr, socklen_t addrlen)
 {
-	if (preeny_socket_threads_to_front[sockfd])
-	{
-		preeny_info("Emulating bind on port %d\n", ntohs(((struct sockaddr_in*)addr)->sin_port));
-		return 0;
-	}
-	else
-	{
-		return original_bind(sockfd, addr, addrlen);
-	}
+	return 0;
 }
 
 int listen(int sockfd, int backlog)
@@ -315,4 +269,34 @@ int getsockname(int sockfd, struct sockaddr *addr, socklen_t *addrlen) {
 	*addrlen = copylen;
 
 	return 0;
+}
+
+ssize_t send(int sockfd, const void *buf, size_t len, int flags) {
+	return len;
+}
+
+ssize_t sendto(int sockfd, const void *buf, size_t len, int flags, const struct sockaddr *dest_addr, socklen_t addrlen) {
+	return len;
+}
+
+ssize_t sendmsg(int sockfd, const struct msghdr *msg, int flags) {
+	ssize_t ret = 0;
+
+	for (size_t i = 0; i < msg->msg_iovlen; i++) {
+		ret += msg->msg_iov[i].iov_len;
+	}
+
+	return ret;
+}
+
+ssize_t recv(int sockfd, void *buf, size_t len, int flags) {
+	return read(0, buf, len);
+}
+
+ssize_t recvfrom(int sockfd, void *buf, size_t len, int flags, struct sockaddr *src_addr, socklen_t *addrlen) {
+	return read(0, buf, len);
+}
+
+ssize_t recvmsg(int sockfd, struct msghdr *msg, int flags) {
+	return readv(0, msg->msg_iov, msg->msg_iovlen);
 }
